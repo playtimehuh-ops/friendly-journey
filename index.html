@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      background-color: #1a1a1a;
+      color: #ffffff;
+      font-family: sans-serif;
+      text-align: center;
+      padding: 15px;
+    }
+  </style>
+</head>
+<body>
+  <h3>Tile Hole Bot</h3>
+  <p>Status: Ready</p>
+
+  <script>
+    // Handles buttons on Robotmon's floating overlay menu
+    function onEvent(eventType) {
+      if (eventType === 'OnPlayClick') {
+        JavaScriptInterface.runScript('runSmartBot();');
+      }
+    }
+  </script>
+</body>
+</html>
