@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Scavenger: Realistic Forest Edition - A Voldex Game</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #282c34;
+            font-family: 'Press Start 2P', cursive;
+            color: #eee;
+            text-shadow: 2px 2px #000;
+            overflow: hidden; /* Prevent scrollbars from Three.js canvas */
+        }
+
+        @font-face {
+            font-family: 'Press Start 2P';
+            src: url('https://fonts.gstatic.com/s/pressstart2p/v15/8UUGzNFjgsHBL-URX7PFFR_s_SjT3h0-1.woff2') format('woff2');
+            font-weight: 400;
+            font-style: normal;
+        }
+
+        #game-container {
+            border: 5px solid #61dafb;
+            box-shadow: 0 0 20px rgba(97, 218, 251, 0.7);
+            background-color: #1a1e24;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            border-radius: 10px;
+            position: relative; /* For UI overlay */
+        }
+
+        /* The Three.js canvas will be injected into #threejs-canvas-container */
+        #threejs-canvas-container canvas {
+            display: block;
+            border: 2px solid #555;
+        }
+
+        #game-ui {
+            position: absolute; /* Overlay on top of canvas */
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 1.2em;
+            pointer-events: none; /* Allow mouse events to pass through to canvas if needed */
+            z-index: 10; /* Ensure UI is above canvas */
+            text-shadow: 2px 2px #000;
+            background-color: rgba(0, 0, 0, 0.3);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+
+        #message-display {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 2em;
+            color: #ffeb3b;
+            text-align: center;
+            z-index: 11;
+            pointer-events: none;
+            text-shadow: 4px 4px #000;
+            white-space: nowrap;
+        }
+
+        #start-button {
+            position: absolute;
+            top: calc(50% + 50px); /* Below message */
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 15px 30px;
+            font-size: 1.8em;
+            font-family: 'Press Start 2P', cursive;
+            background-color: #4CAF50;
+            color: white;
+            border: 3px solid #8BC34A;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.2s, transform 0.1s;
+            box-shadow: 0 5px #388E3C;
+            z-index: 12;
+        }
+
+        #start-button:hover {
+            background-color: #45a049;
+            transform: translate(-50%, -50%) translateY(2px);
+            box-shadow: 0 3px #388E3C;
+        }
+
+        #start-button:active {
+            background-color: #3e8e41;
+            transform: translate(-50%, -50%) translateY(5px);
+            box-shadow: 0 0 #388E3C;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <h1>3D Scavenger: Forest Ride!</h1>
+        <div id="threejs-canvas-container"></div>
+        <div id="game-ui">
+            <span id="score-display">Score: 0</span>
+            <span id="health-display">Health: 100</span>
+        </div>
+        <div id="message-display">Ride out! Collect green gems, dodge red spheres!</div>
+        <button id="start-button">START GAME</button>
+    </div>
+
+    <!-- Import Three.js Library and ImprovedNoise -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.js"
+            }
+        }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { ImprovedNoise } from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/examples/jsm/math/ImprovedNoise.js';
+
+        // --- Game Setup ---
+        const canvasContainer = document.getElementById('threejs-canvas-container');
+        const scoreDisplay = document.getElementById('score-display');
+        const healthDisplay = document.getElementById('health-display');
+        const messageDisplay = document.getElementById('message-display');
+        const startButton = document.getElementById('start-button');
+
+        // --- Three.js Scene Setup ---
+        const SCENE_WIDTH = 640;
+        const SCENE_HEIGHT = 480;
+        const SCENE_ASPECT = SCENE_WIDTH / SCENE_HEIGHT;
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, SCENE_ASPECT, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(SCENE_WIDTH, SCENE_HEIGHT);
+        renderer.setClearColor(0x7ec0ee); // Sky blue background
+        renderer.shadowMap.enabled = true; // Enable shadows
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Softer shadows
+        canvasContainer.appendChild(renderer.domElement);
+
+        // --- Lighting ---
+        const ambientLight = new THREE.AmbientLight(0x404040, 1.5); // Soft white light
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 2); // Brighter sunlight
+        directionalLight.position.set(50, 100, 50); // Position high and offset
+        directionalLight.target.position.set(0,0,0);
+        scene.add(directionalLight);
+        scene.add(directionalLight.target);
+
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048; // Higher resolution shadows
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 1;
+        directionalLight.shadow.camera.far = 250;
+        directionalLight.shadow.camera.left = -120;
+        directionalLight.shadow.camera.right = 120;
+        directionalLight.shadow.camera.top = 120;
+        directionalLight.shadow.camera.bottom = -120;
+        // const shadowHelper = new THREE.CameraHelper(directionalLight.shadow.camera);
+        // scene.add(shadowHelper); // Uncomment to visualize shadow camera
+
+        // --- Game Constants ---
+        const CHUNK_SIZE = 40; // Size of each square ground chunk
+        const CHUNK_RESOLUTION = 20; // Vertices per side of a chunk (e.g., 20x20 grid)
+        const RENDER_DISTANCE_CHUNKS = 2; // How many chunks out from player (e.g., 2 means a 5x5 grid)
+        const DESPAWN_DISTANCE = CHUNK_SIZE * (RENDER_DISTANCE_CHUNKS + 1.5); // Distance beyond which objects despawn
+
+        const HEIGHT_SCALE = 10; // Max height variation of terrain
+        const TERRAIN_ROUGHNESS = 0.05; // Frequency of noise for terrain (larger value = more frequent hills)
+        const TERRAIN_DETAIL_ROUGHNESS = 0.2; // Higher frequency for small bumps
+        const TERRAIN_DETAIL_SCALE = 2; // Scale of small bumps
+
+        const TREE_DENSITY = 0.05; // Trees per square unit of chunk (e.g., 0.05 trees per CHUNK_SIZE^2)
+        const BUSH_DENSITY = 0.1; // Bushes per square unit of chunk
+
+        const PLAYER_MODEL_BOUNDING_RADIUS = 3.2;
+        const PLAYER_SPEED = 10; // units per second
+        const PLAYER_TURN_SPEED = 2; // Radians per second for player turning
+        const PLAYER_HEIGHT_OFFSET = 2.0; // How high the horse's base is above the terrain
+        const PLAYER_MAX_HEALTH = 100;
+        const PLAYER_INVINCIBILITY_DURATION = 1.5;
+
+        const PLAYER_HITBOX_SIZE = { x: 3, y: 4.4, z: 6.4 };
+        const PLAYER_HITBOX_Y = 2.3;
+        const GALLOP_LEG_SWING = 0.55;
+        const GALLOP_SPEED_FACTOR = 9;
+        const BODY_BOB_AMOUNT = 0.3;
+
+        const GEM_SIZE = 0.8;
+        const MAX_GEMS = 10; // Target number of gems in the active world
+        const GEM_VALUE = 10;
+
+        const ENEMY_SIZE = 1.2;
+        const ENEMY_SPEED = 5; // units per second
+        const MAX_ENEMIES = 5; // Target number of enemies in the active world
+        const ENEMY_DAMAGE = 10;
+        const ENEMY_SPAWN_INTERVAL = 10;
+        const ENEMY_HARD_CAP = MAX_ENEMIES * 4;
+
+        const COLORS = {
+            gem: 0x28a745,
+            enemy: 0xdc3545,
+            groundLow: 0x4a6d3f, // Darker green for low ground
+            groundHigh: 0x6e8e58, // Lighter green for high ground
+            groundSteep: 0x8b6d4b, // Brown for steep slopes/rocks
+            treeTrunk: 0x5a3d2b,
+            treeLeaves: 0x3a6b35,
+            bush: 0x5a8b4b,
+            rock: 0x6e6e6e,
+            invincible: 0xffc107 // Yellow flash for invincibility
+        };
+
+        const HORSE_COLORS = {
+            body: 0x7a4a25,
+            mane: 0x2b1b12,
+            hooves: 0x1a1a1a
+        };
+
+        const RIDER_COLORS = {
+            skin: 0xe0ac69,
+            shirt: 0x3d5a80,
+            pants: 0x2b2b2b,
+            hat: 0x5c3a21,
+            saddle: 0x4a2f1c
+        };
+
+        // --- Game State Variables ---
+        let player = {
+            mesh: null,
+            hitbox: null,
+            health: PLAYER_MAX_HEALTH,
+            invincibleTimer: 0,
+            flashOn: false
+        };
+        let gems = [];
+        let enemies = [];
+        let score = 0;
+        let gameRunning = false;
+        let gameOver = true;
+        let keys = {};
+        let lastFrameTime = 0;
+        let enemiesSpawnedByScore = 0;
+
+        // Group for all dynamic world elements (chunks, gems, enemies, trees, bushes)
+        let worldGroup = new THREE.Group();
+        scene.add(worldGroup);
+
+        let activeChunks = new Map(); // Stores { "x,z": THREE.Mesh }
+        let playerCurrentChunk = { x: 0, z: 0 };
+
+        const noise = new ImprovedNoise(); // Perlin noise generator
+
+        // --- Sound Effects ---
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+        function playSound(frequency, duration, type = 'sine', volume = 0.5) {
+            if (!audioContext) return;
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+
+            oscillator.type = type;
+            oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+            gainNode.gain.setValueAtTime(volume, audioContext.currentTime);
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+
+            oscillator.start();
+            oscillator.stop(audioContext.currentTime + duration);
+        }
+
+        // --- Helper Functions ---
+        function getRandomArbitrary(min, max) {
+            return Math.random() * (max - min) + min;
+        }
+
+        // Get terrain height at a specific world (x, z) coordinate
+        function getTerrainHeightAtWorldPos(worldX, worldZ) {
+            const baseNoise = noise.noise(worldX * TERRAIN_ROUGHNESS, worldZ * TERRAIN_ROUGHNESS, 0) * HEIGHT_SCALE;
+            const detailNoise = noise.noise(worldX * TERRAIN_DETAIL_ROUGHNESS, worldZ * TERRAIN_DETAIL_ROUGHNESS, 1) * TERRAIN_DETAIL_SCALE;
+            return baseNoise + detailNoise;
+        }
+
+        // Generate a random position for an object, on the terrain surface
+        function generateRandomPositionOnTerrain(objectSize) {
+            const spawnRadius = CHUNK_SIZE * RENDER_DISTANCE_CHUNKS * 0.8;
+            let x, z, y;
+            let positionFound = false;
+            let attempts = 0;
+            const maxAttempts = 50;
+
+            const playerWorldPos = player.mesh ? player.mesh.position : new THREE.Vector3(0,0,0);
+
+            while (!positionFound && attempts < maxAttempts) {
+                x = playerWorldPos.x + getRandomArbitrary(-spawnRadius, spawnRadius);
+                z = playerWorldPos.z + getRandomArbitrary(-spawnRadius, spawnRadius);
+                y = getTerrainHeightAtWorldPos(x, z);
+
+                const tempPos = new THREE.Vector3(x, y, z);
+                const distanceToPlayer = tempPos.distanceTo(playerWorldPos);
+
+                const minSpawnDistance = PLAYER_MODEL_BOUNDING_RADIUS * 5;
+                if (distanceToPlayer >= minSpawnDistance) {
+                    positionFound = true;
+                }
+                attempts++;
+            }
+
+            if (!positionFound) {
+                x = playerWorldPos.x + getRandomArbitrary(-spawnRadius, spawnRadius);
+                z = playerWorldPos.z + getRandomArbitrary(-spawnRadius, spawnRadius);
+                y = getTerrainHeightAtWorldPos(x, z);
+            }
+
+            return new THREE.Vector3(x, y + objectSize / 2, z); // Position above terrain
+        }
+
+        // Simple AABB collision detection using Three.js Box3
+        function checkCollision(mesh1, mesh2) {
+            const box1 = new THREE.Box3().setFromObject(mesh1);
+            const box2 = new THREE.Box3().setFromObject(mesh2);
+            return box1.intersectsBox(box2);
+        }
+
+        // --- Player: Horse & Rider Model ---
+        function createHorseAndRider() {
+            const group = new THREE.Group();
+            const bodyMaterials = [];
+
+            function addPart(geometry, color, position, rotation) {
+                const material = new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0.05 });
+                const mesh = new THREE.Mesh(geometry, material);
+                mesh.position.set(position.x, position.y, position.z);
+                if (rotation) mesh.rotation.set(rotation.x || 0, rotation.y || 0, rotation.z || 0);
+                mesh.castShadow = true;
+                group.add(mesh);
+                bodyMaterials.push(material);
+                return mesh;
+            }
+
+            addPart(new THREE.CapsuleGeometry(1.1, 2.8, 4, 8), HORSE_COLORS.body, { x: 0, y: 3.8, z: 0.2 }, { x: Math.PI / 2 });
+            addPart(new THREE.CapsuleGeometry(0.5, 1.5, 4, 8), HORSE_COLORS.body, { x: 0, y: 4.5, z: -2.0 }, { x: -0.9 });
+            addPart(new THREE.BoxGeometry(0.8, 0.9, 1.4), HORSE_COLORS.body, { x: 0, y: 5.5, z: -2.95 }, { x: -0.35 });
+            addPart(new THREE.BoxGeometry(0.5, 0.5, 0.85), HORSE_COLORS.body, { x: 0, y: 5.1, z: -3.65 }, { x: -0.35 });
+            addPart(new THREE.ConeGeometry(0.15, 0.4, 5), HORSE_COLORS.body, { x: -0.26, y: 6.1, z: -2.8 }, { z: -0.2 });
+            addPart(new THREE.ConeGeometry(0.15, 0.4, 5), HORSE_COLORS.body, { x: 0.26, y: 6.1, z: -2.8 }, { z: 0.2 });
+            for (let i = 0; i < 4; i++) {
+                const t = i / 3;
+                addPart(new THREE.BoxGeometry(0.16, 0.35, 0.35), HORSE_COLORS.mane, { x: 0, y: 4.9 + t * 0.6, z: -1.6 - t * 1.3 }, { x: -0.6 });
+            }
+            addPart(new THREE.ConeGeometry(0.32, 2.0, 6), HORSE_COLORS.mane, { x: 0, y: 3.0, z: 2.6 }, { x: Math.PI - 0.35 });
+
+            const legPivotY = 2.9;
+            const legPositionsX = [-0.7, 0.7, -0.7, 0.7];
+            const legPositionsZ = [-1.3, -1.3, 1.5, 1.5];
+            const legs = [];
+            for (let i = 0; i < 4; i++) {
+                const pivot = new THREE.Group();
+                pivot.position.set(legPositionsX[i], legPivotY, legPositionsZ[i]);
+
+                const legMat = new THREE.MeshStandardMaterial({ color: HORSE_COLORS.body, roughness: 0.85 });
+                const legMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.19, 2.6, 6), legMat);
+                legMesh.position.y = -1.25;
+                legMesh.castShadow = true;
+                pivot.add(legMesh);
+
+                const hoofMat = new THREE.MeshStandardMaterial({ color: HORSE_COLORS.hooves, roughness: 0.9 });
+                const hoof = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.27, 0.35, 6), hoofMat);
+                hoof.position.y = -2.7;
+                hoof.castShadow = true;
+                pivot.add(hoof);
+
+                group.add(pivot);
+                legs.push(pivot);
+                bodyMaterials.push(legMat, hoofMat);
+            }
+
+            addPart(new THREE.BoxGeometry(1.05, 0.3, 1.5), RIDER_COLORS.saddle, { x: 0, y: 5.05, z: 0.1 });
+            addPart(new THREE.BoxGeometry(0.8, 1.1, 0.55), RIDER_COLORS.shirt, { x: 0, y: 5.75, z: 0.15 }, { x: -0.12 });
+            addPart(new THREE.SphereGeometry(0.4, 8, 8), RIDER_COLORS.skin, { x: 0, y: 6.55, z: -0.05 });
+            addPart(new THREE.ConeGeometry(0.44, 0.38, 8), RIDER_COLORS.hat, { x: 0, y: 6.95, z: -0.05 });
+            addPart(new THREE.CylinderGeometry(0.13, 0.13, 0.85, 6), RIDER_COLORS.shirt, { x: -0.5, y: 5.6, z: -0.55 }, { x: -1.0 });
+            addPart(new THREE.CylinderGeometry(0.13, 0.13, 0.85, 6), RIDER_COLORS.shirt, { x: 0.5, y: 5.6, z: -0.55 }, { x: -1.0 });
+            addPart(new THREE.CylinderGeometry(0.15, 0.15, 1.2, 6), RIDER_COLORS.pants, { x: -0.55, y: 4.85, z: 0.35 }, { x: 1.3 });
+            addPart(new THREE.CylinderGeometry(0.15, 0.15, 1.2, 6), RIDER_COLORS.pants, { x: 0.55, y: 4.85, z: 0.35 }, { x: 1.3 });
+
+            group.userData.legs = legs;
+            group.userData.bodyMaterials = bodyMaterials;
+            group.userData.originalColors = bodyMaterials.map(m => m.color.getHex());
+            group.userData.gallopPhase = 0;
+
+            scene.add(group);
+            return group;
+        }
+
+        function createPlayer() {
+            const group = createHorseAndRider();
+            group.position.set(0, getTerrainHeightAtWorldPos(0, 0) + PLAYER_HEIGHT_OFFSET, 0);
+            player.mesh = group;
+
+            const hitboxGeo = new THREE.BoxGeometry(PLAYER_HITBOX_SIZE.x, PLAYER_HITBOX_SIZE.y, PLAYER_HITBOX_SIZE.z);
+            const hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
+            const hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
+            hitbox.position.set(0, getTerrainHeightAtWorldPos(0, 0) + PLAYER_HITBOX_Y, 0);
+            scene.add(hitbox);
+            player.hitbox = hitbox;
+        }
+
+        function setPlayerFlash(active) {
+            const group = player.mesh;
+            if (!group) return;
+            const mats = group.userData.bodyMaterials;
+            const original = group.userData.originalColors;
+            for (let i = 0; i < mats.length; i++) {
+                mats[i].color.setHex(active ? COLORS.invincible : original[i]);
+            }
+            player.flashOn = active;
+        }
+
+        function createGem() {
+            const geometry = new THREE.OctahedronGeometry(GEM_SIZE / 2);
+            const material = new THREE.MeshLambertMaterial({ color: COLORS.gem });
+            const mesh = new THREE.Mesh(geometry, material);
+            const pos = generateRandomPositionOnTerrain(GEM_SIZE);
+            mesh.position.set(pos.x, pos.y, pos.z);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            mesh.userData.isGem = true;
+            worldGroup.add(mesh);
+            return mesh;
+        }
+
+        function createEnemy() {
+            const geometry = new THREE.SphereGeometry(ENEMY_SIZE / 2, 8, 8);
+            const material = new THREE.MeshLambertMaterial({ color: COLORS.enemy });
+            const mesh = new THREE.Mesh(geometry, material);
+            const pos = generateRandomPositionOnTerrain(ENEMY_SIZE);
+            mesh.position.set(pos.x, pos.y, pos.z);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            mesh.userData.isEnemy = true;
+            worldGroup.add(mesh);
+            return mesh;
+        }
+
+        // --- Procedural World Elements ---
+        function createTree(x, z, baseHeight, scaleFactor = 1) {
+            const treeGroup = new THREE.Group();
+            treeGroup.position.set(x, baseHeight, z);
+
+            const trunkHeight = getRandomArbitrary(4, 7) * scaleFactor;
+            const trunkRadius = getRandomArbitrary(0.5, 0.8) * scaleFactor;
+            const trunkGeo = new THREE.CylinderGeometry(trunkRadius, trunkRadius * 0.8, trunkHeight, 6);
+            const trunkMat = new THREE.MeshStandardMaterial({ color: COLORS.treeTrunk, roughness: 0.9 });
+            const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+            trunk.position.y = trunkHeight / 2;
+            trunk.castShadow = true;
+            trunk.receiveShadow = true;
+            treeGroup.add(trunk);
+
+            const numCones = getRandomArbitrary(2, 4);
+            for (let i = 0; i < numCones; i++) {
+                const coneRadius = getRandomArbitrary(2, 3) * scaleFactor;
+                const coneHeight = getRandomArbitrary(3, 5) * scaleFactor;
+                const coneGeo = new THREE.ConeGeometry(coneRadius, coneHeight, 8);
+                const coneMat = new THREE.MeshStandardMaterial({ color: COLORS.treeLeaves, roughness: 0.8 });
+                const cone = new THREE.Mesh(coneGeo, coneMat);
+                cone.position.y = trunkHeight + (i * coneHeight * 0.4) + getRandomArbitrary(-0.5, 0.5);
+                cone.rotation.y = getRandomArbitrary(0, Math.PI * 2);
+                cone.castShadow = true;
+                cone.receiveShadow = true;
+                treeGroup.add(cone);
+            }
+            return treeGroup;
+        }
+
+        function createBush(x, z, baseHeight) {
+            const bushGroup = new THREE.Group();
+            bushGroup.position.set(x, baseHeight, z);
+
+            const numSpheres = getRandomArbitrary(2, 4);
+            for (let i = 0; i < numSpheres; i++) {
+                const sphereRadius = getRandomArbitrary(0.8, 1.5);
+                const sphereGeo = new THREE.SphereGeometry(sphereRadius, 8, 8);
+                const sphereMat = new THREE.MeshStandardMaterial({ color: COLORS.bush, roughness: 0.7 });
+                const sphere = new THREE.Mesh(sphereGeo, sphereMat);
+                sphere.position.set(getRandomArbitrary(-0.5, 0.5), sphereRadius * 0.8 + getRandomArbitrary(-0.2, 0.2), getRandomArbitrary(-0.5, 0.5));
+                sphere.castShadow = true;
+                sphere.receiveShadow = true;
+                bushGroup.add(sphere);
+            }
+            return bushGroup;
+        }
+
+        function createRock(x, z, baseHeight) {
+            const rockGroup = new THREE.Group();
+            rockGroup.position.set(x, baseHeight, z);
+
+            const numShapes = getRandomArbitrary(1, 2);
+            for (let i = 0; i < numShapes; i++) {
+                const boxSize = getRandomArbitrary(1, 2);
+                const boxGeo = new THREE.BoxGeometry(boxSize, boxSize * getRandomArbitrary(0.5, 1.5), boxSize);
+                const boxMat = new THREE.MeshStandardMaterial({ color: COLORS.rock, roughness: 0.9 });
+                const box = new THREE.Mesh(boxGeo, boxMat);
+                box.position.set(getRandomArbitrary(-0.5, 0.5), boxSize * 0.5 * getRandomArbitrary(0.5, 1.0), getRandomArbitrary(-0.5, 0.5));
+                box.rotation.set(getRandomArbitrary(0, Math.PI), getRandomArbitrary(0, Math.PI), getRandomArbitrary(0, Math.PI));
+                box.castShadow = true;
+                box.receiveShadow = true;
+                rockGroup.add(box);
+            }
+            return rockGroup;
+        }
+
+
+        // Replaces createGround for infinite generation with terrain
+        function createChunk(cx, cz) {
+            const geometry = new THREE.BufferGeometry();
+            const positions = [];
+            const colors = [];
+            const indices = [];
+
+            const colorLow = new THREE.Color(COLORS.groundLow);
+            const colorHigh = new THREE.Color(COLORS.groundHigh);
+            const colorSteep = new THREE.Color(COLORS.groundSteep);
+
+            const halfChunk = CHUNK_SIZE / 2;
+            const segmentSize = CHUNK_SIZE / CHUNK_RESOLUTION;
+
+            // Generate vertices and colors
+            for (let i = 0; i <= CHUNK_RESOLUTION; i++) {
+                for (let j = 0; j <= CHUNK_RESOLUTION; j++) {
+                    const x = (j * segmentSize) - halfChunk;
+                    const z = (i * segmentSize) - halfChunk;
+                    const worldX = cx * CHUNK_SIZE + x;
+                    const worldZ = cz * CHUNK_SIZE + z;
+
+                    const y = getTerrainHeightAtWorldPos(worldX, worldZ);
+
+                    positions.push(x, y, z);
+
+                    const heightFactor = (y - (-HEIGHT_SCALE)) / (HEIGHT_SCALE - (-HEIGHT_SCALE)); // Normalize height to 0-1
+                    const color = new THREE.Color().lerpColors(colorLow, colorHigh, heightFactor);
+                    colors.push(color.r, color.g, color.b);
+                }
+            }
+
+            // Generate faces (indices)
+            for (let i = 0; i < CHUNK_RESOLUTION; i++) {
+                for (let j = 0; j < CHUNK_RESOLUTION; j++) {
+                    const a = i * (CHUNK_RESOLUTION + 1) + j;
+                    const b = a + 1;
+                    const c = (i + 1) * (CHUNK_RESOLUTION + 1) + j;
+                    const d = c + 1;
+
+                    // Two triangles per square
+                    indices.push(a, b, c);
+                    indices.push(b, d, c);
+                }
+            }
+
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            geometry.setIndex(indices);
+            geometry.computeVertexNormals(); // Important for lighting
+
+            const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
+            const chunk = new THREE.Mesh(geometry, material);
+            chunk.position.set(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE); // Chunk position is its center in world space
+            chunk.receiveShadow = true;
+            chunk.castShadow = true; // Chunks can cast shadows on themselves/other chunks
+            worldGroup.add(chunk);
+
+            // Add trees and bushes to this chunk
+            chunk.userData.trees = [];
+            chunk.userData.bushes = [];
+            chunk.userData.rocks = [];
+
+            const numTrees = Math.floor(CHUNK_SIZE * CHUNK_SIZE * TREE_DENSITY);
+            for (let i = 0; i < numTrees; i++) {
+                const randX = getRandomArbitrary(-halfChunk, halfChunk);
+                const randZ = getRandomArbitrary(-halfChunk, halfChunk);
+                const worldX = cx * CHUNK_SIZE + randX;
+                const worldZ = cz * CHUNK_SIZE + randZ;
+                const terrainY = getTerrainHeightAtWorldPos(worldX, worldZ);
+                if (terrainY > -HEIGHT_SCALE * 0.8) { // Only place trees on higher ground
+                    const tree = createTree(randX, randZ, terrainY);
+                    chunk.add(tree); // Add tree as child of chunk
+                    chunk.userData.trees.push(tree);
+                }
+            }
+
+            const numBushes = Math.floor(CHUNK_SIZE * CHUNK_SIZE * BUSH_DENSITY);
+            for (let i = 0; i < numBushes; i++) {
+                const randX = getRandomArbitrary(-halfChunk, halfChunk);
+                const randZ = getRandomArbitrary(-halfChunk, halfChunk);
+                const worldX = cx * CHUNK_SIZE + randX;
+                const worldZ = cz * CHUNK_SIZE + randZ;
+                const terrainY = getTerrainHeightAtWorldPos(worldX, worldZ);
+                const bush = createBush(randX, randZ, terrainY);
+                chunk.add(bush);
+                chunk.userData.bushes.push(bush);
+            }
+
+            const numRocks = Math.floor(CHUNK_SIZE * CHUNK_SIZE * BUSH_DENSITY * 0.5);
+            for (let i = 0; i < numRocks; i++) {
+                const randX = getRandomArbitrary(-halfChunk, halfChunk);
+                const randZ = getRandomArbitrary(-halfChunk, halfChunk);
+                const worldX = cx * CHUNK_SIZE + randX;
+                const worldZ = cz * CHUNK_SIZE + randZ;
+                const terrainY = getTerrainHeightAtWorldPos(worldX, worldZ);
+                const rock = createRock(randX, randZ, terrainY);
+                chunk.add(rock);
+                chunk.userData.rocks.push(rock);
+            }
+
+
+            return chunk;
+        }
+
+        // --- Infinite Generation Logic ---
+        function updateChunkGrid() {
+            if (!player.mesh) return;
+
+            const newPlayerChunkX = Math.floor(player.mesh.position.x / CHUNK_SIZE);
+            const newPlayerChunkZ = Math.floor(player.mesh.position.z / CHUNK_SIZE);
+
+            if (newPlayerChunkX !== playerCurrentChunk.x || newPlayerChunkZ !== playerCurrentChunk.z) {
+                playerCurrentChunk.x = newPlayerChunkX;
+                playerCurrentChunk.z = newPlayerChunkZ;
+            }
+
+            for (let cx = playerCurrentChunk.x - RENDER_DISTANCE_CHUNKS; cx <= playerCurrentChunk.x + RENDER_DISTANCE_CHUNKS; cx++) {
+                for (let cz = playerCurrentChunk.z - RENDER_DISTANCE_CHUNKS; cz <= playerCurrentChunk.z + RENDER_DISTANCE_CHUNKS; cz++) {
+                    const key = `${cx},${cz}`;
+                    if (!activeChunks.has(key)) {
+                        const chunk = createChunk(cx, cz);
+                        activeChunks.set(key, chunk);
+                    }
+                }
+            }
+
+            for (const [key, chunk] of activeChunks.entries()) {
+                const [cx, cz] = key.split(',').map(Number);
+                const distanceX = Math.abs(cx - playerCurrentChunk.x);
+                const distanceZ = Math.abs(cz - playerCurrentChunk.z);
+
+                if (distanceX > RENDER_DISTANCE_CHUNKS || distanceZ > RENDER_DISTANCE_CHUNKS) {
+                    // Remove all children (trees, bushes, rocks) first
+                    chunk.userData.trees.forEach(tree => chunk.remove(tree));
+                    chunk.userData.bushes.forEach(bush => chunk.remove(bush));
+                    chunk.userData.rocks.forEach(rock => chunk.remove(rock));
+                    worldGroup.remove(chunk);
+                    activeChunks.delete(key);
+                }
+            }
+        }
+
+        // --- Game Initialization & Reset ---
+        function initGame() {
+            gems.forEach(gem => worldGroup.remove(gem));
+            enemies.forEach(enemy => worldGroup.remove(enemy));
+            gems = [];
+            enemies = [];
+
+            if (player.mesh) {
+                player.mesh.position.set(0, getTerrainHeightAtWorldPos(0, 0) + PLAYER_HEIGHT_OFFSET, 0);
+                player.mesh.rotation.y = 0;
+                player.mesh.userData.gallopPhase = 0;
+                player.mesh.userData.legs.forEach(leg => { leg.rotation.x = 0; });
+                setPlayerFlash(false);
+                player.hitbox.position.set(0, getTerrainHeightAtWorldPos(0, 0) + PLAYER_HITBOX_Y, 0);
+            } else {
+                createPlayer();
+            }
+
+            playerCurrentChunk = { x: 0, z: 0 };
+            activeChunks.forEach(chunk => {
+                chunk.userData.trees.forEach(tree => chunk.remove(tree));
+                chunk.userData.bushes.forEach(bush => chunk.remove(bush));
+                chunk.userData.rocks.forEach(rock => chunk.remove(rock));
+                worldGroup.remove(chunk)
+            });
+            activeChunks.clear();
+            updateChunkGrid();
+
+            player.health = PLAYER_MAX_HEALTH;
+            player.invincibleTimer = 0;
+            score = 0;
+            enemiesSpawnedByScore = 0;
+            gameRunning = true;
+            gameOver = false;
+            keys = {};
+
+            while (gems.length < MAX_GEMS) {
+                gems.push(createGem());
+            }
+            while (enemies.length < MAX_ENEMIES) {
+                enemies.push(createEnemy());
+            }
+
+            updateUI();
+            messageDisplay.textContent = '';
+            startButton.style.display = 'none';
+
+            lastFrameTime = 0;
+        }
+
+        function resetGame() {
+            gameRunning = false;
+            gameOver = true;
+            messageDisplay.textContent = 'GAME OVER! Final Score: ' + score + '!';
+            startButton.textContent = 'PLAY AGAIN';
+            startButton.style.display = 'block';
+            playSound(100, 0.5, 'triangle');
+        }
+
+        // --- Game Loop (Three.js animate function) ---
+        function animate(timestamp) {
+            requestAnimationFrame(animate);
+
+            if (!lastFrameTime) lastFrameTime = timestamp;
+            const deltaTime = (timestamp - lastFrameTime) / 1000;
+            lastFrameTime = timestamp;
+
+            if (gameRunning && !gameOver) {
+                update(deltaTime);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // --- Update Game State ---
+        function update(deltaTime) {
+            updateChunkGrid();
+
+            let moveForward = 0;
+            let turnDirection = 0;
+
+            if (keys['arrowup'] || keys['w']) moveForward = 1;
+            if (keys['arrowdown'] || keys['s']) moveForward = -1;
+            if (keys['arrowleft'] || keys['a']) turnDirection = 1;
+            if (keys['arrowright'] || keys['d']) turnDirection = -1;
+
+            player.mesh.rotation.y += turnDirection * PLAYER_TURN_SPEED * deltaTime;
+
+            if (moveForward !== 0) {
+                const forwardVector = new THREE.Vector3(0, 0, -1);
+                forwardVector.applyQuaternion(player.mesh.quaternion);
+
+                player.mesh.position.x += forwardVector.x * moveForward * PLAYER_SPEED * deltaTime;
+                player.mesh.position.z += forwardVector.z * moveForward * PLAYER_SPEED * deltaTime;
+
+                // Player terrain following
+                const currentTerrainY = getTerrainHeightAtWorldPos(player.mesh.position.x, player.mesh.position.z);
+                player.mesh.position.y = currentTerrainY + PLAYER_HEIGHT_OFFSET;
+            }
+
+            const isMovingLinearly = moveForward !== 0;
+
+            if (isMovingLinearly) {
+                player.mesh.userData.gallopPhase += deltaTime * GALLOP_SPEED_FACTOR;
+                const phase = player.mesh.userData.gallopPhase;
+                const legs = player.mesh.userData.legs;
+                legs[0].rotation.x = Math.sin(phase) * GALLOP_LEG_SWING;
+                legs[1].rotation.x = Math.sin(phase + Math.PI) * GALLOP_LEG_SWING;
+                legs[2].rotation.x = Math.sin(phase + Math.PI) * GALLOP_LEG_SWING;
+                legs[3].rotation.x = Math.sin(phase) * GALLOP_LEG_SWING;
+
+                const bobbingAmount = Math.abs(Math.sin(phase * 2)) * BODY_BOB_AMOUNT;
+                player.mesh.position.y = getTerrainHeightAtWorldPos(player.mesh.position.x, player.mesh.position.z) + PLAYER_HEIGHT_OFFSET + bobbingAmount;
+            } else {
+                const legs = player.mesh.userData.legs;
+                legs.forEach(leg => { leg.rotation.x *= 0.85; });
+                player.mesh.position.y += ( (getTerrainHeightAtWorldPos(player.mesh.position.x, player.mesh.position.z) + PLAYER_HEIGHT_OFFSET) - player.mesh.position.y) * 0.2;
+            }
+
+            player.hitbox.position.copy(player.mesh.position);
+            player.hitbox.position.y = getTerrainHeightAtWorldPos(player.hitbox.position.x, player.hitbox.position.z) + PLAYER_HITBOX_Y;
+
+
+            if (player.invincibleTimer > 0) {
+                player.invincibleTimer -= deltaTime;
+                const shouldFlash = Math.floor(player.invincibleTimer * 10) % 2 === 0;
+                if (shouldFlash !== player.flashOn) setPlayerFlash(shouldFlash);
+            } else if (player.flashOn) {
+                setPlayerFlash(false);
+            }
+
+            for (let i = gems.length - 1; i >= 0; i--) {
+                const gem = gems[i];
+                gem.rotation.y += Math.PI * deltaTime;
+
+                if (gem.getWorldPosition(new THREE.Vector3()).distanceTo(player.mesh.position) > DESPAWN_DISTANCE) {
+                    worldGroup.remove(gem);
+                    gems.splice(i, 1);
+                    gems.push(createGem());
+                    continue;
+                }
+
+                if (checkCollision(player.hitbox, gem)) {
+                    score += GEM_VALUE;
+                    worldGroup.remove(gem);
+                    gems.splice(i, 1);
+                    gems.push(createGem());
+                    playSound(880, 0.05, 'sine');
+
+                    if (score > enemiesSpawnedByScore + ENEMY_SPAWN_INTERVAL && enemies.length < ENEMY_HARD_CAP) {
+                        enemies.push(createEnemy());
+                        enemiesSpawnedByScore += ENEMY_SPAWN_INTERVAL;
+                        playSound(300, 0.1, 'triangle');
+                    }
+                }
+            }
+
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                const enemy = enemies[i];
+
+                if (enemy.getWorldPosition(new THREE.Vector3()).distanceTo(player.mesh.position) > DESPAWN_DISTANCE && enemies.length > MAX_ENEMIES) {
+                    worldGroup.remove(enemy);
+                    enemies.splice(i, 1);
+                    continue;
+                }
+
+                const dx = player.mesh.position.x - enemy.position.x;
+                const dz = player.mesh.position.z - enemy.position.z;
+                const distance = Math.sqrt(dx * dx + dz * dz);
+
+                if (distance > 0) {
+                    enemy.position.x += (dx / distance) * ENEMY_SPEED * deltaTime;
+                    enemy.position.z += (dz / distance) * ENEMY_SPEED * deltaTime;
+                    enemy.position.y = getTerrainHeightAtWorldPos(enemy.position.x, enemy.position.z) + ENEMY_SIZE / 2;
+                }
+
+                if (player.invincibleTimer <= 0 && distance > 0 && checkCollision(player.hitbox, enemy)) {
+                    player.health -= ENEMY_DAMAGE;
+                    player.invincibleTimer = PLAYER_INVINCIBILITY_DURATION;
+                    playSound(200, 0.1, 'square');
+
+                    const knockbackStrength = 5;
+                    player.mesh.position.x += (dx / distance) * knockbackStrength;
+                    player.mesh.position.z += (dz / distance) * knockbackStrength;
+
+                    player.mesh.position.y = getTerrainHeightAtWorldPos(player.mesh.position.x, player.mesh.position.z) + PLAYER_HEIGHT_OFFSET;
+                    player.hitbox.position.copy(player.mesh.position);
+                    player.hitbox.position.y = getTerrainHeightAtWorldPos(player.hitbox.position.x, player.hitbox.position.z) + PLAYER_HITBOX_Y;
+
+                    if (player.health <= 0) {
+                        player.health = 0;
+                        gameOver = true;
+                    }
+                }
+            }
+
+            updateUI();
+            updateCamera();
+
+            if (gameOver) {
+                resetGame();
+            }
+        }
+
+        // --- Camera Setup ---
+        function setupCamera() {
+            camera.position.set(0, 15, 20);
+            camera.lookAt(0, 0, 0);
+        }
+
+        // Update camera to follow player and adjust light
+        function updateCamera() {
+            if (player.mesh) {
+                const cameraOffset = new THREE.Vector3(0, 15, 20);
+                cameraOffset.applyQuaternion(player.mesh.quaternion);
+                camera.position.copy(player.mesh.position).add(cameraOffset);
+                camera.lookAt(player.mesh.position.x, player.mesh.position.y + 5, player.mesh.position.z);
+
+                directionalLight.position.copy(player.mesh.position).add(new THREE.Vector3(50, 100, 50));
+                directionalLight.target.position.copy(player.mesh.position);
+                directionalLight.target.updateMatrixWorld();
+            }
+        }
+
+        // --- UI Updates ---
+        function updateUI() {
+            scoreDisplay.textContent = `Score: ${score}`;
+            healthDisplay.textContent = `Health: ${player.health}`;
+        }
+
+        // --- Event Listeners ---
+        startButton.addEventListener('click', () => {
+            if (audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+            initGame();
+        });
+
+        window.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+        });
+
+        window.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+
+        // Initial setup
+        createPlayer(); // Create player mesh immediately
+        setupCamera();
+        updateUI();
+        // messageDisplay.textContent is already set in the HTML, no need to set here
+        // startButton is enabled by default in HTML, no need to set here
+        
+        animate(0);
+    </script>
+</body>
+</html>
