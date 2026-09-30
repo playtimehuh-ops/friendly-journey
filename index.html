@@ -152,7 +152,7 @@ $("send").onclick=async()=>{
   const ai=document.createElement("div");ai.className="m";ai.innerHTML='<div class="bubble">Running imported model…</div>';$("messages").appendChild(ai);$("messages").scrollTop=$("messages").scrollHeight;
   try{
     if(m.runtime){
-      const out=await generate(m.runtime,text);ai.querySelector(".bubble").textContent=out||"(empty continuation)";
+      const out=await generate(m.pkg||m.runtime,text);ai.querySelector(".bubble").textContent=out||"(empty continuation)";
     }else{
       const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({modelId:m.id,prompt:text})});
       const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||"Inference request failed.");ai.querySelector(".bubble").textContent=d.content||"(empty continuation)";
