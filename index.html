@@ -76,8 +76,50 @@ function decode(ids,v){return ids.map(i=>v.idToToken[i]??"").join("")}
 function sample(logits,temp=.8,k=20){const a=Array.from(logits,(x,i)=>({x:x/Math.max(.05,temp),i})).sort((a,b)=>b.x-a.x).slice(0,k),mx=a[0].x;let sum=0;for(const z of a){z.p=Math.exp(z.x-mx);sum+=z.p}let r=Math.random()*sum;for(const z of a){r-=z.p;if(r<=0)return z.i}return a[a.length-1].i}
 async function generate(m,prompt){const start=encode(prompt,m.v),ids=start.slice(-m.cfg.maxSeq);for(let i=0;i<64;i++){const logits=forward(m,ids),n=sample(logits,.8,20);ids.push(n);if(m.v.eos!=null&&n===+m.v.eos)break;await new Promise(r=>setTimeout(r,0))}return decode(ids.slice(start.length),m.v)}
 function countParams(w){let n=0;function c(v){if(Array.isArray(v)){n+=v.flat(Infinity).length;return}if(v&&typeof v==="object"){for(const x of Object.values(v))c(x)}}c(w);return n}
-async function saveModel(m){m.owner=await owner();await put(m)}
-async function loadModels(){const own=await owner();S.models=(await all()).filter(m=>m.owner===own)}
+async function serverSave(m){
+  const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+S.token},body:JSON.stringify({action:"save",model:{id:m.id,name:m.name,version:m.version,info:m.info,price:m.price,visibility:m.visibility,active:m.active,paid:m.paid,params:m.params,package:m.pkg}})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok)throw Error(d.error||"Server model storage is unavailable.");
+  return d.model;
+}
+async function saveModel(m){
+  m.owner=await owner();
+  await put(m);
+  try{await serverSave(m)}catch(e){console.warn(e)}
+}
+async function hydrateModel(m){
+  if(m.runtime)return m;
+  const r=await fetch("/api/models?id="+encodeURIComponent(m.id)+"&scope=owner",{headers:{"Authorization":"Bearer "+S.token}});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok)throw Error(d.error||"Could not load the stored model.");
+  if(d.model?.package){
+    const parsed=inspect(d.model.package);
+    m.pkg=d.model.package;
+    m.runtime=parsed;
+  }
+  if(d.model){m.active=!!d.model.active;m.paid=!!d.model.paid;m.name=d.model.name;m.version=d.model.version;m.info=d.model.info;m.price=Number(d.model.price)||0}
+  await put(m);
+  return m;
+}
+async function loadModels(){
+  const own=await owner();
+  S.models=(await all()).filter(m=>m.owner===own);
+  try{
+    const r=await fetch("/api/models",{headers:{"Authorization":"Bearer "+S.token}});
+    const d=await r.json().catch(()=>({}));
+    if(r.ok&&Array.isArray(d.models)){
+      for(const remote of d.models){
+        const local=S.models.find(m=>m.id===remote.id);
+        if(local){
+          Object.assign(local,remote,{owner:own});
+          await put(local);
+        }else{
+          S.models.push({id:remote.id,owner:own,name:remote.name,version:remote.version,info:remote.info,visibility:remote.visibility,price:Number(remote.price)||0,active:!!remote.active,paid:!!remote.paid,params:Number(remote.params)||0,createdAt:remote.created_at||new Date().toISOString()});
+        }
+      }
+    }
+  }catch(e){console.warn(e)}
+}
 function active(m){return !!m.active&&!!m.paid}
 function row(m){return '<div class="row"><div class="row-main"><strong>'+esc(m.name)+'</strong><div class="meta">'+esc(m.version)+' · '+m.params.toLocaleString()+' params · $'+m.price+'/mo · '+(active(m)?"ACTIVE":m.paid?"INACTIVE":"PAYMENT REQUIRED")+'</div></div><div class="actions"><span class="pill '+(active(m)?"active":"")+'">'+(active(m)?"Active":"Inactive")+'</span><button class="btn" onclick="manage('+JSON.stringify(m.id)+')">Manage</button><button class="btn primary" onclick="openChat('+JSON.stringify(m.id)+')">Chat</button></div></div>'}
 function refresh(){ $("count").textContent=S.models.length;$("active").textContent=S.models.filter(active).length;$("params").textContent=S.models.reduce((a,m)=>a+(m.params||0),0).toLocaleString();$("recent").innerHTML=S.models.slice(-5).reverse().map(row).join("")||'<div class="note">No models registered yet.</div>';$("models").innerHTML=S.models.map(row).join("")||'<div class="note">Import a trained model to begin.</div>';$("chatlist").innerHTML=S.models.map(m=>'<div class="chatitem '+(S.selected===m.id?"sel":"")+'" onclick="openChat('+JSON.stringify(m.id)+')"><b>'+esc(m.name)+'</b><small>'+esc(m.version)+' · '+(active(m)?"active":"inactive")+'</small></div>').join("")}
@@ -86,8 +128,38 @@ window.manage=async id=>{const m=S.models.find(x=>x.id===id);if(!m)return;$("man
 window.saveEdit=async id=>{const m=S.models.find(x=>x.id===id);if(!m)return;m.name=$("eName").value.trim()||m.name;m.version=$("eVersion").value.trim()||m.version;m.price=Math.max(0,Number($("ePrice").value)||0);m.info=$("eInfo").value.trim();await saveModel(m);closeManage();refresh();toast("Saved")}
 window.removeModel=async id=>{if(!confirm("Delete this model?"))return;await del(id);S.models=S.models.filter(x=>x.id!==id);closeManage();refresh();toast("Deleted")}
 window.pay=async id=>{const m=S.models.find(x=>x.id===id);if(!m)return;try{const r=await fetch("/api/checkout",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+S.token},body:JSON.stringify({modelId:m.id,name:m.name,price:m.price})});const d=await r.json();if(!r.ok)throw Error(d.error||"Checkout unavailable");if(d.url){location.href=d.url;return}}catch(e){toast(e.message)}}
-window.openChat=async id=>{const m=S.models.find(x=>x.id===id);if(!m)return;S.selected=id;refresh();show("chat");$("chatname").textContent=m.name;$("chatstatus").textContent=active(m)?"ACTIVE":"INACTIVE";$("chatstatus").className="pill "+(active(m)?"active":"");$("runtime").textContent=active(m)?"Inference: imported weights":"Activation required";$("chatinput").disabled=!active(m);$("send").disabled=!active(m);$("messages").innerHTML=active(m)?'<div class="note">Model loaded from its imported package. No external LLM is called.</div>':'<div class="note">Pay and activate this model before chat.</div>'}
-$("send").onclick=async()=>{const m=S.models.find(x=>x.id===S.selected),text=$("chatinput").value.trim();if(!m||!text||!active(m))return;$("chatinput").value="";$("send").disabled=true;const me=document.createElement("div");me.className="m me";me.innerHTML='<div class="bubble"></div>';me.querySelector(".bubble").textContent=text;$("messages").appendChild(me);const ai=document.createElement("div");ai.className="m";ai.innerHTML='<div class="bubble">Running imported model…</div>';$("messages").appendChild(ai);$("messages").scrollTop=$("messages").scrollHeight;try{const out=await generate(m.runtime,text);ai.querySelector(".bubble").textContent=out||"(empty continuation)"}catch(e){ai.querySelector(".bubble").textContent="Inference error: "+e.message}$("send").disabled=false}
+window.openChat=async id=>{
+  let m=S.models.find(x=>x.id===id);if(!m)return;
+  S.selected=id;refresh();show("chat");
+  $("chatname").textContent=m.name;$("chatstatus").textContent=active(m)?"ACTIVE":"INACTIVE";$("chatstatus").className="pill "+(active(m)?"active":"");
+  $("runtime").textContent=active(m)?"Loading imported weights…":"Activation required";
+  $("chatinput").disabled=true;$("send").disabled=true;
+  $("messages").innerHTML='<div class="note">Loading the trained model package…</div>';
+  try{
+    if(active(m))await hydrateModel(m);
+    $("chatstatus").textContent=active(m)?"ACTIVE":"INACTIVE";
+    $("runtime").textContent=active(m)?"Inference: imported weights":"Activation required";
+    $("chatinput").disabled=!active(m);$("send").disabled=!active(m);
+    $("messages").innerHTML=active(m)?'<div class="note">Model loaded from its imported parameters. No external LLM is called.</div>':'<div class="note">Pay and activate this model before chat.</div>';
+  }catch(e){
+    $("messages").innerHTML='<div class="note bad">'+esc(e.message)+'</div>';
+  }
+}
+$("send").onclick=async()=>{
+  const m=S.models.find(x=>x.id===S.selected),text=$("chatinput").value.trim();if(!m||!text||!active(m))return;
+  $("chatinput").value="";$("send").disabled=true;
+  const me=document.createElement("div");me.className="m me";me.innerHTML='<div class="bubble"></div>';me.querySelector(".bubble").textContent=text;$("messages").appendChild(me);
+  const ai=document.createElement("div");ai.className="m";ai.innerHTML='<div class="bubble">Running imported model…</div>';$("messages").appendChild(ai);$("messages").scrollTop=$("messages").scrollHeight;
+  try{
+    if(m.runtime){
+      const out=await generate(m.runtime,text);ai.querySelector(".bubble").textContent=out||"(empty continuation)";
+    }else{
+      const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({modelId:m.id,prompt:text})});
+      const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||"Inference request failed.");ai.querySelector(".bubble").textContent=d.content||"(empty continuation)";
+    }
+  }catch(e){ai.querySelector(".bubble").textContent="Inference error: "+e.message}
+  $("send").disabled=false
+}
 async function importModel(file){const pkg=JSON.parse(await file.text());const parsed=inspect(pkg),params=countParams(parsed.w);S.imported={pkg,parsed,params,source:file.name};$("name").value=$("name").value||pkg.name||parsed.m.name||file.name.replace(/\.[^.]+$/,"");$("importState").innerHTML='<span class="ok">Verified</span> · '+parsed.cfg.architecture+' · vocab '+parsed.cfg.vocab+' · hidden '+parsed.cfg.dim+' · '+parsed.cfg.layers+' layers · '+params.toLocaleString()+' parameters';$("register").disabled=false;show("import");toast("Trained model verified.")}
 $("register").onclick=async()=>{if(!S.imported)return;const x=S.imported,m={id:crypto.randomUUID(),name:$("name").value.trim()||"Unnamed AI",version:$("version").value.trim()||"1.0.0",price:Math.max(0,Number($("price").value)||0),info:$("info").value.trim(),visibility:$("visibility").value,active:false,paid:false,params:x.params,source:x.source,createdAt:new Date().toISOString(),runtime:x.parsed,pkg:x.pkg};await saveModel(m);await loadModels();S.imported=null;$("register").disabled=true;$("importState").textContent="No model loaded.";show("models");toast("Model registered under your account.")}
 function closeManage(){$("manageModal").classList.remove("open")}$("closeManage").onclick=closeManage;$("manageModal").onclick=e=>e.target===e.currentTarget&&closeManage();$("priceBtn").onclick=()=>$("priceModal").classList.add("open");$("closePrice").onclick=()=>$("priceModal").classList.remove("open");$("topImport").onclick=()=>show("import");$("tokenBtn").onclick=()=>{$("tokenInput").value=S.token;$("tokenModal").classList.add("open")};$("closeToken").onclick=()=>$("tokenModal").classList.remove("open");
@@ -95,7 +167,33 @@ $("newToken").onclick=async()=>{const b=new Uint8Array(32);crypto.getRandomValue
 $("saveToken").onclick=async()=>{const t=$("tokenInput").value.trim();if(!/^cb_[A-Za-z0-9_-]{40,80}$/.test(t))return toast("Invalid token");S.token=t;localStorage.setItem("modeldock-token",t);await loadModels();$("tokenMini").textContent=S.token;$("tokenModal").classList.remove("open");refresh();toast("Account switched.")};
 document.querySelectorAll(".nav button").forEach(b=>b.onclick=()=>show(b.dataset.view));$("choose").onclick=()=>$("file").click();$("file").onchange=e=>e.target.files[0]&&importModel(e.target.files[0]).catch(x=>toast(x.message));
 ["dragenter","dragover"].forEach(t=>$("drop").addEventListener(t,e=>{e.preventDefault();$("drop").classList.add("drag")}));["dragleave","drop"].forEach(t=>$("drop").addEventListener(t,e=>{e.preventDefault();$("drop").classList.remove("drag")}));$("drop").addEventListener("drop",e=>{const f=e.dataTransfer.files[0];if(f)importModel(f).catch(x=>toast(x.message))});$("chatinput").addEventListener("keydown",e=>{if((e.ctrlKey||e.metaKey)&&e.key==="Enter")$("send").click()});
-(async()=>{await ensureToken();$("tokenMini").textContent=S.token;await dbOpen();await loadModels();const q=new URLSearchParams(location.search);if(q.get("payment")==="success"){const m=S.models.find(x=>x.id===q.get("modelId"));if(m){m.paid=true;m.active=true;await saveModel(m);await loadModels()}}refresh()})().catch(e=>toast(e.message));
+(async()=>{
+  await ensureToken();$("tokenMini").textContent=S.token;await dbOpen();await loadModels();
+  const q=new URLSearchParams(location.search);
+  if(q.get("payment")==="success"){
+    const m=S.models.find(x=>x.id===q.get("modelId"));
+    if(m){
+      try{
+        const vr=await fetch("/api/verify-payment",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+S.token},body:JSON.stringify({modelId:m.id,sessionId:q.get("session_id")})});
+        const vd=await vr.json().catch(()=>({}));
+        if(!vr.ok)throw Error(vd.error||"Payment verification failed.");
+        Object.assign(m,{paid:true,active:true});await saveModel(m);
+      }catch(e){toast(e.message)}
+    }
+    history.replaceState(null,"",location.pathname);
+  }
+  const publicId=q.get("model");
+  if(publicId){
+    try{
+      const pr=await fetch("/api/models?id="+encodeURIComponent(publicId)+"&scope=public");
+      const pd=await pr.json();
+      if(!pr.ok)throw Error(pd.error||"Public model unavailable.");
+      const pub=pd.model;
+      S.models=[{id:pub.id,name:pub.name,version:pub.version,info:pub.info,visibility:pub.visibility,price:Number(pub.price)||0,active:true,paid:true,params:Number(pub.params)||0,owner:"public"}];
+      refresh();await openChat(pub.id);history.replaceState(null,"",location.pathname+"?model="+encodeURIComponent(pub.id));
+    }catch(e){toast(e.message)}
+  }else refresh();
+})().catch(e=>toast(e.message));
 </script>
 </body>
 </html>
