@@ -8,6 +8,7 @@ create table if not exists public.modeldock_models (
   price numeric(10,2) not null default 0,
   active boolean not null default false,
   paid boolean not null default false,
+  subscription_id text,
   params bigint not null default 0,
   package jsonb not null,
   created_at timestamptz not null default now(),
@@ -20,3 +21,4 @@ create or replace function public.modeldock_touch_updated_at() returns trigger l
 begin new.updated_at=now(); return new; end $$;
 drop trigger if exists modeldock_touch on public.modeldock_models;
 create trigger modeldock_touch before update on public.modeldock_models for each row execute function public.modeldock_touch_updated_at();
+grant select, insert, update, delete on public.modeldock_models to service_role;
