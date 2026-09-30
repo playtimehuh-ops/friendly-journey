@@ -1,0 +1,27 @@
+name: ModelDock Check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Check frontend JavaScript
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const html = fs.readFileSync('index.html', 'utf8');
+          const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)].map(m => m[1]);
+          if (!scripts.length) throw new Error('No script block found');
+          for (const script of scripts) new Function(script);
+          console.log('HTML script syntax OK');
+          NODE
+      - name: Check backend JavaScript
+        run: |
+          find api lib -name '*.js' -print0 | xargs -0 -n1 node --check
